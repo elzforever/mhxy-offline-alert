@@ -18,6 +18,7 @@ export interface DetectionResult {
   isDisconnected: boolean;
   confidence: number;
   reason: string;
+  debugText?: string; // Raw text extracted by OCR for debugging
 }
 
 export interface Settings {

@@ -1,20 +1,32 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { MonitorState, MonitorLog, DetectionResult, Settings } from './types';
-import { GeminiService } from './services/geminiService';
+import { OcrService } from './services/ocrService';
 import { 
   Bell, 
   Settings as SettingsIcon, 
-  Activity, 
   Camera, 
   StopCircle, 
   Play, 
   History,
   ShieldAlert,
-  Smartphone,
   MessageSquare,
-  Clock,
-  Info
+  Cpu,
+  Send,
+  Wifi,
+  WifiOff,
+  Upload,
+  CheckCircle2,
+  XCircle,
+  Bug
 } from 'lucide-react';
+
+interface QueuedAlert {
+  id: string;
+  url: string;
+  body?: string; // For webhooks
+  type: 'meow' | 'webhook';
+  timestamp: number;
+}
 
 const App: React.FC = () => {
   // --- State ---
@@ -27,21 +39,28 @@ const App: React.FC = () => {
 
   const [settings, setSettings] = useState<Settings>({
     webhookUrl: '',
-    meowCode: '', // Initialize meowCode
+    meowCode: '', 
     checkInterval: 5, 
-    sensitivity: 0.7
+    sensitivity: 0.6 
   });
 
   const [showSettings, setShowSettings] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [isNetworkOnline, setIsNetworkOnline] = useState(navigator.onLine);
+  const [pendingAlertCount, setPendingAlertCount] = useState(0);
+
+  // Testing State
+  const [testResult, setTestResult] = useState<DetectionResult | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
 
   // --- Refs ---
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const geminiRef = useRef<GeminiService | null>(null);
+  const ocrRef = useRef<OcrService | null>(null);
   const intervalRef = useRef<number | null>(null);
+  const alertQueue = useRef<QueuedAlert[]>([]);
 
-  // Logic Refs (Using refs instead of state to avoid stale closure issues in setInterval)
+  // Logic Refs
   const alertLogic = useRef<{
     disconnectStartTime: number | null;
     lastAlertTime: number | null;
@@ -49,20 +68,37 @@ const App: React.FC = () => {
 
   // --- Initialization ---
   useEffect(() => {
-    geminiRef.current = new GeminiService();
+    ocrRef.current = new OcrService();
     
-    // Load settings from local storage if available
     const savedSettings = localStorage.getItem('gw_settings');
     if (savedSettings) {
       try {
         const parsed = JSON.parse(savedSettings);
-        // Migration support if needed, or just load valid keys
         setSettings(prev => ({ ...prev, ...parsed }));
       } catch (e) { console.error("Failed to load settings"); }
     }
+
+    // Network Listeners
+    const handleOnline = () => {
+      setIsNetworkOnline(true);
+      addLog('success', '网络已恢复连接，正在检查待发送报警...');
+      processAlertQueue();
+    };
+    const handleOffline = () => {
+      setIsNetworkOnline(false);
+      addLog('warning', '本机网络已断开。报警将存入队列等待重连。');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      ocrRef.current?.terminate();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
-  // Save settings when changed
   useEffect(() => {
     localStorage.setItem('gw_settings', JSON.stringify(settings));
   }, [settings]);
@@ -82,6 +118,35 @@ const App: React.FC = () => {
     }));
   }, []);
 
+  // --- Queue Processing ---
+  const processAlertQueue = async () => {
+    if (alertQueue.current.length === 0) return;
+
+    const queue = [...alertQueue.current];
+    alertQueue.current = []; // Clear queue immediately to prevent duplicates
+    setPendingAlertCount(0);
+
+    addLog('info', `正在补发 ${queue.length} 条积压的报警...`);
+
+    for (const alert of queue) {
+      try {
+        if (alert.type === 'meow') {
+           new Image().src = alert.url;
+        } else if (alert.type === 'webhook' && alert.body) {
+           await fetch(alert.url, {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: alert.body
+           });
+        }
+        // Small delay to prevent rate limiting
+        await new Promise(r => setTimeout(r, 500));
+      } catch (e) {
+        console.error("Retry failed for alert", alert.id);
+      }
+    }
+  };
+
   const startScreenCapture = async () => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -94,7 +159,6 @@ const App: React.FC = () => {
         setIsCapturing(true);
         addLog('info', '屏幕捕获已成功启动。');
         
-        // Handle stream stop (e.g. user clicks "Stop sharing" browser UI)
         stream.getVideoTracks()[0].onended = () => {
            stopCapture();
         };
@@ -121,9 +185,8 @@ const App: React.FC = () => {
   };
 
   const performCheck = useCallback(async () => {
-    if (!videoRef.current || !canvasRef.current || !geminiRef.current) return;
+    if (!videoRef.current || !canvasRef.current || !ocrRef.current) return;
 
-    // Use a temp var for current logic to ensure consistency
     const logic = alertLogic.current;
     
     const canvas = canvasRef.current;
@@ -134,18 +197,13 @@ const App: React.FC = () => {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      // Increased quality to 0.95 for better text recognition
-      const imageData = canvas.toDataURL('image/jpeg', 0.95);
+      const imageData = canvas.toDataURL('image/jpeg', 1.0);
 
       try {
-        const result: DetectionResult = await geminiRef.current.analyzeFrame(imageData);
+        const result: DetectionResult = await ocrRef.current.analyzeFrame(imageData);
         const now = Date.now();
         
-        // Handle explicit API/Network errors
-        if (result.reason && (result.reason.startsWith("Request Failed") || result.reason.startsWith("API Route Error") || result.reason.startsWith("Analysis Failed"))) {
-           addLog('error', result.reason);
-           // Do not proceed with logic if API failed
-           setState(prev => ({ ...prev, lastCheck: new Date() }));
+        if (result.reason && (result.reason.startsWith("OCR Model Loading"))) {
            return;
         }
 
@@ -153,26 +211,21 @@ const App: React.FC = () => {
 
         // Logic Update
         if (isDisconnected) {
-          // 1. Initialize Start Time if new disconnect
           if (!logic.disconnectStartTime) {
             logic.disconnectStartTime = now;
-            addLog('warning', `检测到疑似掉线。正在验证(30秒)... 原因: ${result.reason}`);
+            addLog('warning', `OCR 检测到关键字。正在验证(15秒)... 原因: ${result.reason}`);
           }
 
           const durationMs = now - logic.disconnectStartTime;
           
-          // 2. Alert Logic
-          // Max duration 10 minutes (600,000 ms)
           if (durationMs < 600000) {
             let shouldAlert = false;
 
-            // Initial Alert: Wait 30 seconds (30,000 ms)
-            if (durationMs >= 30000) {
+            // Initial Alert: Wait 15 seconds
+            if (durationMs >= 15000) {
                if (!logic.lastAlertTime) {
-                 // First alert
                  shouldAlert = true;
                } else if (now - logic.lastAlertTime >= 60000) {
-                 // Follow-up alerts: Every 60 seconds (60,000 ms)
                  shouldAlert = true;
                }
             }
@@ -191,15 +244,9 @@ const App: React.FC = () => {
           }));
 
         } else {
-          // Connected or Low Confidence
-          if (result.isDisconnected && result.confidence < settings.sensitivity) {
-            // Log low confidence detections so user knows AI is working but filtered
-            addLog('info', `AI 怀疑掉线但置信度低 (${(result.confidence * 100).toFixed(0)}% < ${(settings.sensitivity * 100).toFixed(0)}%)。原因: ${result.reason}`);
-          }
-
+          // Connected
           if (logic.disconnectStartTime) {
-            addLog('success', '连接已恢复。报警逻辑已重置。');
-            // Reset logic
+            addLog('success', '未检测到掉线关键字。报警逻辑已重置。');
             logic.disconnectStartTime = null;
             logic.lastAlertTime = null;
           }
@@ -211,9 +258,14 @@ const App: React.FC = () => {
           }));
         }
 
+        // Try processing queue if we are online and have items (double check mechanism)
+        if (navigator.onLine && alertQueue.current.length > 0) {
+           processAlertQueue();
+        }
+
       } catch (err) {
         console.error(err);
-        addLog('error', '分析周期失败。');
+        addLog('error', 'OCR 分析失败。');
         setState(prev => ({ ...prev, status: 'idle' }));
       }
     }
@@ -221,49 +273,66 @@ const App: React.FC = () => {
 
   const triggerAlert = async (result: DetectionResult, durationSec: number) => {
     const timestamp = new Date().toLocaleString();
-    
-    // 1. Miao Ti Xing (喵提醒) Notification
-    if (settings.meowCode) {
-      try {
-        // Miao Ti Xing API: https://miaotixing.com/trigger
-        const baseUrl = 'https://miaotixing.com/trigger';
-        // Construct message
-        const text = `游戏掉线提醒\n\n状态: 掉线了，掉线了\n原因: ${result.reason}\n持续时间: ${durationSec}秒\n时间: ${timestamp}`;
-        
-        const params = new URLSearchParams({
-          id: settings.meowCode,
-          text: text,
-          type: 'json'
-        });
+    const isOnline = navigator.onLine;
 
-        // Using GET with no-cors to simple trigger
-        await fetch(`${baseUrl}?${params.toString()}`, {
-          method: 'GET',
-          mode: 'no-cors'
+    // 1. Miao Ti Xing
+    if (settings.meowCode) {
+      const baseUrl = 'https://miaotixing.com/trigger';
+      // Mention if this is a delayed report
+      const prefix = isOnline ? "" : "[延迟补发] ";
+      const text = `${prefix}游戏掉线提醒 (OCR)\n\n状态: 掉线了\n识别内容: ${result.reason}\n持续时间: ${durationSec}秒\n时间: ${timestamp}`;
+      
+      const params = new URLSearchParams({
+        id: settings.meowCode,
+        text: text,
+        type: 'json'
+      });
+      const fullUrl = `${baseUrl}?${params.toString()}`;
+
+      if (isOnline) {
+        new Image().src = fullUrl;
+        console.log("Sent Meow Notification");
+      } else {
+        alertQueue.current.push({
+          id: Math.random().toString(),
+          url: fullUrl,
+          type: 'meow',
+          timestamp: Date.now()
         });
-        
-        // Note: With no-cors we can't read the response, but the request is sent.
-        // Meow notification usually accepts GET requests.
-      } catch (e) {
-        console.error("Meow notification failed", e);
+        setPendingAlertCount(prev => prev + 1);
+        console.log("Queued Meow Notification");
       }
     }
 
-    // 2. Generic Webhook
+    // 2. Webhook
     if (settings.webhookUrl) {
-      fetch(settings.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event: 'GAME_DISCONNECTED',
-          reason: result.reason,
-          duration: durationSec,
-          timestamp: new Date().toISOString()
-        })
-      }).catch(e => console.error("Webhook failed", e));
+      const body = JSON.stringify({
+        event: 'GAME_DISCONNECTED',
+        method: 'LOCAL_OCR',
+        reason: result.reason,
+        duration: durationSec,
+        timestamp: new Date().toISOString()
+      });
+
+      if (isOnline) {
+        fetch(settings.webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        }).catch(e => console.error("Webhook failed", e));
+      } else {
+        alertQueue.current.push({
+          id: Math.random().toString(),
+          url: settings.webhookUrl,
+          type: 'webhook',
+          body: body,
+          timestamp: Date.now()
+        });
+        setPendingAlertCount(prev => prev + 1);
+      }
     }
     
-    // 3. Browser notification
+    // 3. Browser notification (Local, so always works)
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification("游戏掉线警报!", {
         body: `掉线了！持续时间: ${durationSec}s. 原因: ${result.reason}`,
@@ -271,9 +340,44 @@ const App: React.FC = () => {
       });
     }
     
-    // 4. In-app visual / audio alert
+    // 4. Audio (Local)
     const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
     audio.play().catch(() => {});
+  };
+
+  const handleTestAlert = () => {
+    if (!settings.meowCode && !settings.webhookUrl) {
+      alert("请先配置 喵码 或 Webhook URL");
+      return;
+    }
+    addLog('info', '正在发送测试报警...');
+    triggerAlert({
+      isDisconnected: true,
+      confidence: 1.0,
+      reason: "用户手动测试"
+    }, 0);
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !ocrRef.current) return;
+
+    setIsTesting(true);
+    setTestResult(null);
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target?.result as string;
+      try {
+        const result = await ocrRef.current!.analyzeFrame(base64);
+        setTestResult(result);
+      } catch (err) {
+        console.error("Test failed", err);
+      } finally {
+        setIsTesting(false);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const startMonitoring = () => {
@@ -286,11 +390,10 @@ const App: React.FC = () => {
       Notification.requestPermission();
     }
 
-    // Reset logic when starting fresh
     alertLogic.current = { disconnectStartTime: null, lastAlertTime: null };
 
     setState(prev => ({ ...prev, isMonitoring: true, status: 'scanning' }));
-    addLog('info', `监控已启动。每 ${settings.checkInterval} 秒检测一次。`);
+    addLog('info', `本地 OCR 监控已启动。每 ${settings.checkInterval} 秒检测一次。`);
     
     performCheck();
     intervalRef.current = window.setInterval(performCheck, settings.checkInterval * 1000);
@@ -310,21 +413,33 @@ const App: React.FC = () => {
       {/* Header */}
       <header className="flex items-center justify-between bg-slate-800/50 p-6 rounded-2xl border border-slate-700 backdrop-blur-md">
         <div className="flex items-center space-x-4">
-          <div className="p-3 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-500/20">
-            <Activity className="w-8 h-8 text-white" />
+          <div className="p-3 bg-emerald-600 rounded-xl shadow-lg shadow-emerald-500/20">
+            <Cpu className="w-8 h-8 text-white" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-              GameWatch AI 游戏掉线监控 (本地版)
+            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-emerald-400">
+              GameWatch OCR (本地版)
             </h1>
-            <p className="text-slate-400 text-sm">智能画面识别与报警工具</p>
+            <p className="text-slate-400 text-sm">本地图像文字识别监控 - 无需 API Key</p>
           </div>
         </div>
         
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-4">
+          {/* Network Status Indicator */}
+          <div className={`flex items-center space-x-2 px-4 py-2 rounded-xl border ${
+            isNetworkOnline 
+            ? 'bg-blue-500/10 border-blue-500/30 text-blue-400' 
+            : 'bg-red-500/10 border-red-500/30 text-red-400'
+          }`}>
+            {isNetworkOnline ? <Wifi className="w-5 h-5" /> : <WifiOff className="w-5 h-5" />}
+            <span className="text-xs font-bold uppercase hidden md:inline">
+              {isNetworkOnline ? '网络在线' : '网络断开'}
+            </span>
+          </div>
+
           <button 
             onClick={() => setShowSettings(!showSettings)}
-            className={`p-3 rounded-xl transition-all ${showSettings ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            className={`p-3 rounded-xl transition-all ${showSettings ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
             title="设置"
           >
             <SettingsIcon className="w-6 h-6" />
@@ -343,13 +458,13 @@ const App: React.FC = () => {
                 <Camera className="w-16 h-16 text-slate-600" />
                 <button 
                   onClick={startScreenCapture}
-                  className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full font-semibold transition-all shadow-xl shadow-indigo-500/20 flex items-center space-x-2"
+                  className="px-8 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full font-semibold transition-all shadow-xl shadow-emerald-500/20 flex items-center space-x-2"
                 >
                   <Play className="w-5 h-5" />
                   <span>开始屏幕捕获</span>
                 </button>
                 <p className="text-slate-500 text-sm px-8 text-center">
-                  请选择您的游戏窗口或整个屏幕以开始监控。
+                  无需联网上传。本地识别保障隐私。
                 </p>
               </div>
             )}
@@ -365,8 +480,8 @@ const App: React.FC = () => {
 
             {/* Overlay Status */}
             {isCapturing && (
-              <div className="absolute top-4 left-4 flex items-center space-x-3 pointer-events-none">
-                <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-full backdrop-blur-md border ${
+              <div className="absolute top-4 left-4 flex flex-col space-y-2 pointer-events-none">
+                <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-full backdrop-blur-md border self-start ${
                   state.status === 'alert' ? 'bg-red-500/20 border-red-500 text-red-400' : 
                   state.status === 'scanning' ? 'bg-green-500/20 border-green-500 text-green-400' : 
                   'bg-slate-800/50 border-slate-600 text-slate-400'
@@ -378,10 +493,20 @@ const App: React.FC = () => {
                   }`} />
                   <span className="text-xs font-bold uppercase tracking-wider">
                     {state.status === 'alert' ? '已掉线' : 
-                     state.status === 'scanning' ? '监控中' : 
+                     state.status === 'scanning' ? '监控中 (OCR)' : 
                      '待机'}
                   </span>
                 </div>
+
+                {/* Pending Alerts Indicator */}
+                {!isNetworkOnline && pendingAlertCount > 0 && (
+                  <div className="flex items-center space-x-2 px-3 py-1.5 rounded-full backdrop-blur-md border bg-yellow-500/20 border-yellow-500 text-yellow-400 self-start">
+                    <WifiOff className="w-3 h-3" />
+                    <span className="text-xs font-bold">
+                      {pendingAlertCount} 条报警待补发
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -429,63 +554,37 @@ const App: React.FC = () => {
         <aside className="space-y-6">
           {/* Settings Section */}
           {showSettings ? (
-            <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 h-full overflow-y-auto">
+            <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 h-full overflow-y-auto flex flex-col">
               <h3 className="text-lg font-bold mb-6 flex items-center space-x-2">
-                <ShieldAlert className="w-5 h-5 text-indigo-400" />
-                <span>报警设置 & 使用说明</span>
+                <ShieldAlert className="w-5 h-5 text-emerald-400" />
+                <span>报警设置</span>
               </h3>
-
-              {/* Guide Section */}
-              <div className="bg-blue-900/20 border border-blue-500/30 p-4 rounded-xl mb-6">
-                <div className="flex items-center text-sm font-bold text-blue-300 mb-2">
-                  <Info className="w-4 h-4 mr-2" />
-                  使用说明 & 注意事项
-                </div>
-                <ol className="text-xs text-slate-300 space-y-2 list-decimal list-inside leading-relaxed">
-                  <li>
-                    <span className="text-white font-semibold">获取 喵码:</span> 前往 <a href="http://miaotixing.com/" target="_blank" rel="noreferrer" className="text-indigo-400 underline">喵提醒 (miaotixing.com)</a> 注册账号并创建提醒，获取您的“喵码”。
-                  </li>
-                  <li>
-                    <span className="text-white font-semibold">配置:</span> 将 喵码 复制到下方的输入框中。
-                  </li>
-                  <li>
-                    <span className="text-white font-semibold">启动:</span> 点击“开始屏幕捕获”，选择游戏窗口，然后点击“恢复监控”。
-                  </li>
-                  <li>
-                    <span className="text-white font-semibold">注意:</span> 请确保游戏窗口保持在屏幕上可见（不要最小化），否则无法进行图像识别。
-                  </li>
-                </ol>
-              </div>
               
-              <div className="space-y-6">
+              <div className="space-y-6 flex-grow">
                 
-                {/* Meow Code Input */}
                 <div className="bg-indigo-900/20 p-4 rounded-xl border border-indigo-500/30">
                   <label className="block text-xs font-bold text-indigo-300 uppercase mb-2 flex items-center">
-                    <MessageSquare className="w-3 h-3 mr-1" /> 喵提醒 喵码 (Meow Code)
+                    <MessageSquare className="w-3 h-3 mr-1" /> 喵提醒 喵码
                   </label>
                   <input 
                     type="password"
-                    placeholder="在此粘贴您的 喵码 (例如: txxxxxx)"
+                    placeholder="例如: txxxxxx"
                     value={settings.meowCode}
                     onChange={(e) => setSettings({...settings, meowCode: e.target.value})}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-white placeholder-slate-600"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none text-white placeholder-slate-600"
                   />
-                  <p className="text-[10px] text-slate-400 mt-2">
-                    必填项：用于发送微信报警通知 (通过喵提醒公众号)。
-                  </p>
-                </div>
-
-                <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700 space-y-2">
-                  <div className="flex items-center text-xs font-bold text-slate-300 mb-2">
-                    <Clock className="w-3 h-3 mr-1.5 text-indigo-400" />
-                    <span>智能报警逻辑</span>
+                  <div className="mt-3 flex justify-between items-center">
+                    <p className="text-[10px] text-slate-400">
+                      用于微信报警 (miaotixing.com)
+                    </p>
+                    <button 
+                      onClick={handleTestAlert}
+                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-lg flex items-center space-x-1 transition-colors"
+                    >
+                       <Send className="w-3 h-3" />
+                       <span>测试发送</span>
+                    </button>
                   </div>
-                  <ul className="text-[10px] text-slate-400 space-y-1 list-disc list-inside">
-                    <li>首次报警: <span className="text-indigo-300">检测到掉线 30秒 后</span></li>
-                    <li>重复频率: <span className="text-indigo-300">每 60秒 一次</span></li>
-                    <li>超时停止: <span className="text-indigo-300">持续 10分钟 后不再发送</span></li>
-                  </ul>
                 </div>
 
                 <div>
@@ -494,46 +593,61 @@ const App: React.FC = () => {
                     type="range" min="5" max="60" step="5"
                     value={settings.checkInterval}
                     onChange={(e) => setSettings({...settings, checkInterval: parseInt(e.target.value)})}
-                    className="w-full accent-indigo-500"
+                    className="w-full accent-emerald-500"
                   />
                   <div className="flex justify-between text-xs text-slate-500 mt-1">
                     <span>5秒</span>
-                    <span className="text-indigo-400 font-bold">{settings.checkInterval}秒</span>
+                    <span className="text-emerald-400 font-bold">{settings.checkInterval}秒</span>
                     <span>60秒</span>
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">AI 灵敏度</label>
-                  <input 
-                    type="range" min="0.1" max="1.0" step="0.1"
-                    value={settings.sensitivity}
-                    onChange={(e) => setSettings({...settings, sensitivity: parseFloat(e.target.value)})}
-                    className="w-full accent-indigo-500"
-                  />
-                  <div className="flex justify-between text-xs text-slate-500 mt-1">
-                    <span>低</span>
-                    <span className="text-indigo-400 font-bold">{Math.round(settings.sensitivity * 100)}%</span>
-                    <span>高</span>
-                  </div>
-                </div>
+                {/* Debug Tool Section */}
+                <div className="bg-slate-700/30 p-4 rounded-xl border border-slate-600 border-dashed">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase mb-3 flex items-center">
+                    <Bug className="w-3 h-3 mr-2" /> OCR 诊断工具
+                  </h4>
+                  <p className="text-[10px] text-slate-400 mb-3">
+                    上传掉线截图，测试 OCR 是否能准确识别关键字。
+                  </p>
+                  
+                  <div className="flex flex-col space-y-3">
+                    <label className="flex items-center justify-center px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg cursor-pointer border border-slate-600 transition-colors text-xs font-bold">
+                      <Upload className="w-3 h-3 mr-2" />
+                      {isTesting ? '正在识别...' : '上传图片测试'}
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden" 
+                        onChange={handleFileUpload}
+                        disabled={isTesting}
+                      />
+                    </label>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2 flex items-center">
-                    <Smartphone className="w-3 h-3 mr-1" /> 通用 Webhook (可选)
-                  </label>
-                  <input 
-                    type="text"
-                    placeholder="https://maker.ifttt.com/trigger/..."
-                    value={settings.webhookUrl}
-                    onChange={(e) => setSettings({...settings, webhookUrl: e.target.value})}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
+                    {testResult && (
+                      <div className={`p-3 rounded-lg text-xs border ${testResult.isDisconnected ? 'bg-red-900/20 border-red-500/50' : 'bg-green-900/20 border-green-500/50'}`}>
+                        <div className="flex items-center mb-1 font-bold">
+                          {testResult.isDisconnected ? (
+                            <CheckCircle2 className="w-4 h-4 text-red-400 mr-2" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-green-400 mr-2" />
+                          )}
+                          <span className={testResult.isDisconnected ? 'text-red-400' : 'text-green-400'}>
+                            {testResult.isDisconnected ? '检测到掉线' : '未检测到掉线'}
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          <p className="text-slate-400">原因: <span className="text-slate-200">{testResult.reason}</span></p>
+                          <p className="text-slate-400">原文: <span className="text-slate-200 font-mono bg-black/30 px-1 rounded break-all">{testResult.debugText || "无"}</span></p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <button 
                   onClick={() => setShowSettings(false)}
-                  className="w-full py-3 bg-indigo-600 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+                  className="w-full py-3 bg-emerald-600 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20 mt-4"
                 >
                   保存并返回
                 </button>
@@ -543,8 +657,8 @@ const App: React.FC = () => {
             /* Logs Section */
             <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 h-full flex flex-col">
               <h3 className="text-lg font-bold mb-4 flex items-center space-x-2">
-                <History className="w-5 h-5 text-indigo-400" />
-                <span>运行日志</span>
+                <History className="w-5 h-5 text-emerald-400" />
+                <span>运行日志 (Local)</span>
               </h3>
               
               <div className="flex-grow overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-slate-700">
@@ -561,9 +675,9 @@ const App: React.FC = () => {
                           log.type === 'error' ? 'bg-red-500/20 text-red-400' :
                           log.type === 'success' ? 'bg-green-500/20 text-green-400' :
                           log.type === 'warning' ? 'bg-yellow-500/20 text-yellow-400' :
-                          'bg-indigo-500/20 text-indigo-400'
+                          'bg-emerald-500/20 text-emerald-400'
                         }`}>
-                          {log.type === 'error' ? '错误' : 
+                          {log.type === 'error' ? '掉线' : 
                            log.type === 'success' ? '正常' : 
                            log.type === 'warning' ? '警告' : '信息'}
                         </span>
@@ -588,7 +702,7 @@ const App: React.FC = () => {
 
       {/* Footer Info */}
       <footer className="text-center py-4 text-slate-500 text-xs">
-        <p>© 2024 GameWatch AI - 由 Gemini 3 驱动。本地运行模式。</p>
+        <p>© 2024 GameWatch OCR - 本地离线识别模式。</p>
       </footer>
     </div>
   );
