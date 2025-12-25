@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { MonitorState, MonitorLog, DetectionResult, Settings } from './types';
 import { GeminiService } from './services/geminiService';
@@ -135,11 +134,21 @@ const App: React.FC = () => {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const imageData = canvas.toDataURL('image/jpeg', 0.8);
+      // Increased quality to 0.95 for better text recognition
+      const imageData = canvas.toDataURL('image/jpeg', 0.95);
 
       try {
         const result: DetectionResult = await geminiRef.current.analyzeFrame(imageData);
         const now = Date.now();
+        
+        // Handle explicit API/Network errors
+        if (result.reason && (result.reason.startsWith("Request Failed") || result.reason.startsWith("API Route Error"))) {
+           addLog('error', result.reason);
+           // Do not proceed with logic if API failed
+           setState(prev => ({ ...prev, lastCheck: new Date() }));
+           return;
+        }
+
         const isDisconnected = result.isDisconnected && result.confidence >= settings.sensitivity;
 
         // Logic Update
@@ -182,7 +191,12 @@ const App: React.FC = () => {
           }));
 
         } else {
-          // Connected
+          // Connected or Low Confidence
+          if (result.isDisconnected && result.confidence < settings.sensitivity) {
+            // Log low confidence detections so user knows AI is working but filtered
+            addLog('info', `AI 怀疑掉线但置信度低 (${(result.confidence * 100).toFixed(0)}% < ${(settings.sensitivity * 100).toFixed(0)}%)。原因: ${result.reason}`);
+          }
+
           if (logic.disconnectStartTime) {
             addLog('success', '连接已恢复。报警逻辑已重置。');
             // Reset logic

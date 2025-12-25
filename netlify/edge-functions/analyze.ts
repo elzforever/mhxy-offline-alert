@@ -1,5 +1,9 @@
 import { GoogleGenAI, Type } from "https://esm.sh/@google/genai";
 
+// Declare Deno globally to avoid TypeScript errors in local development environments
+// while ensuring it works in the Netlify Edge (Deno) runtime.
+declare var Deno: any;
+
 export default async (request: Request, context: any) => {
   // Handle CORS preflight requests
   if (request.method === "OPTIONS") {
@@ -16,6 +20,25 @@ export default async (request: Request, context: any) => {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
+  // CORRECT WAY for Netlify Edge Functions: Use Deno.env.get
+  // process.env will cause a crash (500 Error) in this specific runtime.
+  const apiKey = Deno.env.get("GEMINI_API_KEY");
+
+  if (!apiKey) {
+    console.error("GEMINI_API_KEY is not configured in Netlify.");
+    return new Response(
+      JSON.stringify({
+        isDisconnected: false,
+        confidence: 0,
+        reason: "Server Error: GEMINI_API_KEY is missing in Netlify Environment Variables.",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+
   try {
     const { base64Image } = await request.json();
 
@@ -26,24 +49,33 @@ export default async (request: Request, context: any) => {
       });
     }
 
-    // Use process.env.API_KEY directly as per @google/genai guidelines.
-    // Ensure process.env.API_KEY is available in your environment configuration.
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
 
     // Extract base64 data
     const dataPart = base64Image.includes(",") ? base64Image.split(",")[1] : base64Image;
 
-    // Improved Prompt for better detection
+    // Advanced Prompt for Game Disconnection Detection
     const promptText = `
-      Analyze this game screenshot for network connection issues.
-      
-      Detect ANY of the following:
-      1. Explicit Error Text: "Network Error", "Connection Lost", "Disconnected", "Reconnecting", "Server Error", "Timed Out".
-      2. Chinese Text: "网络错误", "请重新登录", "断开连接", "连接超时", "网络异常", "服务器断开".
-      3. Implicit UI Signs: A center pop-up modal/dialog box that interrupts gameplay, containing buttons like "Retry", "Reconnect", "Confirm", "Login", or "Ok".
-      
-      If ANY of these signs are present, set isDisconnected to true.
-      Provide a confidence score (0-1) and a short reason describing what was found.
+      Act as a game stability monitor. Analyze this screenshot to detect if the user has been disconnected or if the game is in an error state.
+
+      Look for these indicators (High Priority):
+      1. **Explicit Keywords**: "Network Error", "Connection Lost", "Disconnected", "Reconnecting", "Server Error", "Timed Out", "Login Failed".
+      2. **Chinese Keywords**: "网络错误", "请重新登录", "断开连接", "连接超时", "网络异常", "服务器断开", "系统提示", "重试".
+      3. **Buttons**: A dialog box with a single or dual button layout containing text like "Confirm", "Retry", "Ok", "Reconnect", "Login", "确定", "重试", "重新连接".
+
+      Look for these indicators (Implicit/Visual):
+      4. **Modal Overlay**: A centered alert box/dialog that darkens the background and clearly interrupts gameplay.
+      5. **Empty State**: A black screen with a spinning loader that has persisted (implies stuck).
+
+      **Decision Logic**:
+      - If you see a "Network Error" or "Disconnected" text -> isDisconnected: true (High Confidence).
+      - If you see a generic popup with "Retry" or "Confirm" in the center of the screen that looks like an error -> isDisconnected: true (Medium Confidence).
+      - If the game looks normal (HUD visible, character visible, no obstructing popups) -> isDisconnected: false.
+
+      Return a JSON object with:
+      - isDisconnected: boolean
+      - confidence: number (0.0 to 1.0)
+      - reason: string (Short explanation, e.g., "Found dialog box with text 'Connection Lost'")
     `;
 
     const response = await ai.models.generateContent({
@@ -99,7 +131,7 @@ export default async (request: Request, context: any) => {
       JSON.stringify({
         isDisconnected: false,
         confidence: 0,
-        reason: "Analysis Failed: " + error.message,
+        reason: "Server Analysis Failed: " + error.message,
       }),
       {
         status: 500,
