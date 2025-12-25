@@ -59,7 +59,7 @@ export default async (request: Request, context: any) => {
       Act as a game stability monitor. Analyze this screenshot to detect if the user has been disconnected or if the game is in an error state.
 
       Look for these indicators (High Priority):
-      1. **Explicit Keywords**: "Network Error", "Connection Lost", "Disconnected", "Reconnecting", "Server Error", "Timed Out", "Login Failed".
+      1. **Explicit Keywords**: "Network Error", "Connection Lost", "Disconnected", "Reconnecting", "Server Error", "Timed Out", "Login Failed", "Unexpected error", "Finish what you were doing".
       2. **Chinese Keywords**: "网络错误", "请重新登录", "断开连接", "连接超时", "网络异常", "服务器断开", "系统提示", "重试".
       3. **Buttons**: A dialog box with a single or dual button layout containing text like "Confirm", "Retry", "Ok", "Reconnect", "Login", "确定", "重试", "重新连接".
 
@@ -68,7 +68,7 @@ export default async (request: Request, context: any) => {
       5. **Empty State**: A black screen with a spinning loader that has persisted (implies stuck).
 
       **Decision Logic**:
-      - If you see a "Network Error" or "Disconnected" text -> isDisconnected: true (High Confidence).
+      - If you see a "Network Error", "Unexpected error", or "Disconnected" text -> isDisconnected: true (High Confidence).
       - If you see a generic popup with "Retry" or "Confirm" in the center of the screen that looks like an error -> isDisconnected: true (Medium Confidence).
       - If the game looks normal (HUD visible, character visible, no obstructing popups) -> isDisconnected: false.
 
