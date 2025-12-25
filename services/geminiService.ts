@@ -2,16 +2,37 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { DetectionResult } from "../types";
 
 export class GeminiService {
-  private ai: GoogleGenAI;
+  private ai: GoogleGenAI | null = null;
+  private initError: string | null = null;
 
   constructor() {
     // Initialize Gemini API Client directly in the browser.
     // NOTE: For local development, ensure your bundler (Vite/Webpack) exposes process.env.API_KEY.
-    // If using Vite, you might need to configure 'define' in vite.config.ts to map process.env.API_KEY to your actual key.
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const apiKey = process.env.API_KEY;
+
+    if (!apiKey) {
+      this.initError = "API Key Missing: process.env.API_KEY is not set. Please check your local .env file.";
+      console.error(this.initError);
+    } else {
+      try {
+        this.ai = new GoogleGenAI({ apiKey });
+      } catch (e: any) {
+        this.initError = "Gemini Client Init Failed: " + e.message;
+        console.error(this.initError);
+      }
+    }
   }
 
   async analyzeFrame(base64Image: string): Promise<DetectionResult> {
+    // Fail fast if initialization failed
+    if (this.initError || !this.ai) {
+      return {
+        isDisconnected: false,
+        confidence: 0,
+        reason: "Configuration Error: " + (this.initError || "Gemini Client not initialized")
+      };
+    }
+
     try {
       // Extract base64 data (remove "data:image/jpeg;base64," prefix if present)
       const dataPart = base64Image.includes(",") ? base64Image.split(",")[1] : base64Image;
