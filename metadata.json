@@ -1,0 +1,9 @@
+{
+  "name": "GameWatch AI - Disconnect Monitor",
+  "description": "An AI-powered game monitoring tool that uses screen recognition to detect disconnections and send alerts via webhooks/SMS simulations.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ]
+}
