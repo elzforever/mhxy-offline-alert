@@ -13,7 +13,8 @@ import {
   ShieldAlert,
   Smartphone,
   MessageSquare,
-  Clock
+  Clock,
+  Info
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -27,8 +28,8 @@ const App: React.FC = () => {
 
   const [settings, setSettings] = useState<Settings>({
     webhookUrl: '',
-    pushPlusToken: '',
-    checkInterval: 5, // Default to faster checks for smoother logic
+    meowCode: '', // Initialize meowCode
+    checkInterval: 5, 
     sensitivity: 0.7
   });
 
@@ -55,7 +56,9 @@ const App: React.FC = () => {
     const savedSettings = localStorage.getItem('gw_settings');
     if (savedSettings) {
       try {
-        setSettings(JSON.parse(savedSettings));
+        const parsed = JSON.parse(savedSettings);
+        // Migration support if needed, or just load valid keys
+        setSettings(prev => ({ ...prev, ...parsed }));
       } catch (e) { console.error("Failed to load settings"); }
     }
   }, []);
@@ -90,7 +93,7 @@ const App: React.FC = () => {
         videoRef.current.srcObject = stream;
         videoRef.current.play();
         setIsCapturing(true);
-        addLog('info', 'Screen capture started successfully.');
+        addLog('info', '屏幕捕获已成功启动。');
         
         // Handle stream stop (e.g. user clicks "Stop sharing" browser UI)
         stream.getVideoTracks()[0].onended = () => {
@@ -99,10 +102,10 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
-        addLog('warning', 'Screen capture permission denied by user.');
+        addLog('warning', '用户拒绝了屏幕捕获权限。');
       } else {
         console.error(err);
-        addLog('error', 'Failed to start screen capture.');
+        addLog('error', '启动屏幕捕获失败。');
       }
     }
   };
@@ -115,7 +118,7 @@ const App: React.FC = () => {
     }
     setIsCapturing(false);
     stopMonitoring();
-    addLog('info', 'Capture stopped.');
+    addLog('info', '捕获已停止。');
   };
 
   const performCheck = useCallback(async () => {
@@ -144,7 +147,7 @@ const App: React.FC = () => {
           // 1. Initialize Start Time if new disconnect
           if (!logic.disconnectStartTime) {
             logic.disconnectStartTime = now;
-            addLog('warning', `Potential disconnection detected. Verifying for 30s... Reason: ${result.reason}`);
+            addLog('warning', `检测到疑似掉线。正在验证(30秒)... 原因: ${result.reason}`);
           }
 
           const durationMs = now - logic.disconnectStartTime;
@@ -168,7 +171,7 @@ const App: React.FC = () => {
             if (shouldAlert) {
               await triggerAlert(result, Math.floor(durationMs / 1000));
               logic.lastAlertTime = now;
-              addLog('error', `ALERT TRIGGERED: ${result.reason} (Duration: ${Math.floor(durationMs/1000)}s)`, imageData);
+              addLog('error', `触发报警: ${result.reason} (持续时间: ${Math.floor(durationMs/1000)}秒)`, imageData);
             }
           }
 
@@ -181,7 +184,7 @@ const App: React.FC = () => {
         } else {
           // Connected
           if (logic.disconnectStartTime) {
-            addLog('success', 'Connection restored. Logic reset.');
+            addLog('success', '连接已恢复。报警逻辑已重置。');
             // Reset logic
             logic.disconnectStartTime = null;
             logic.lastAlertTime = null;
@@ -192,14 +195,11 @@ const App: React.FC = () => {
             lastCheck: new Date(),
             status: 'scanning' 
           }));
-          
-          // Optional: Log every few checks if desired, or keep it quiet to avoid spam
-          // addLog('success', `Status check: Online.`);
         }
 
       } catch (err) {
         console.error(err);
-        addLog('error', 'Analysis cycle failed.');
+        addLog('error', '分析周期失败。');
         setState(prev => ({ ...prev, status: 'idle' }));
       }
     }
@@ -208,24 +208,30 @@ const App: React.FC = () => {
   const triggerAlert = async (result: DetectionResult, durationSec: number) => {
     const timestamp = new Date().toLocaleString();
     
-    // 1. PushPlus (WeChat) Notification
-    if (settings.pushPlusToken) {
+    // 1. Miao Ti Xing (喵提醒) Notification
+    if (settings.meowCode) {
       try {
-        const baseUrl = 'https://www.pushplus.plus/send';
+        // Miao Ti Xing API: https://miaotixing.com/trigger
+        const baseUrl = 'https://miaotixing.com/trigger';
+        // Construct message
+        const text = `游戏掉线提醒\n\n状态: 掉线了，掉线了\n原因: ${result.reason}\n持续时间: ${durationSec}秒\n时间: ${timestamp}`;
+        
         const params = new URLSearchParams({
-          token: settings.pushPlusToken,
-          title: '游戏掉线提醒',
-          content: `掉线了，掉线了<br><br>原因: ${result.reason}<br>持续时间: ${durationSec}秒<br>时间: ${timestamp}`,
-          template: 'html'
+          id: settings.meowCode,
+          text: text,
+          type: 'json'
         });
 
+        // Using GET with no-cors to simple trigger
         await fetch(`${baseUrl}?${params.toString()}`, {
           method: 'GET',
           mode: 'no-cors'
         });
         
+        // Note: With no-cors we can't read the response, but the request is sent.
+        // Meow notification usually accepts GET requests.
       } catch (e) {
-        console.error("PushPlus failed", e);
+        console.error("Meow notification failed", e);
       }
     }
 
@@ -245,7 +251,7 @@ const App: React.FC = () => {
     
     // 3. Browser notification
     if ("Notification" in window && Notification.permission === "granted") {
-      new Notification("GameWatch Alert!", {
+      new Notification("游戏掉线警报!", {
         body: `掉线了！持续时间: ${durationSec}s. 原因: ${result.reason}`,
         icon: "https://picsum.photos/100/100"
       });
@@ -258,7 +264,7 @@ const App: React.FC = () => {
 
   const startMonitoring = () => {
     if (!isCapturing) {
-      addLog('warning', 'Start screen capture first before monitoring.');
+      addLog('warning', '请先启动屏幕捕获，然后再开始监控。');
       return;
     }
     
@@ -270,7 +276,7 @@ const App: React.FC = () => {
     alertLogic.current = { disconnectStartTime: null, lastAlertTime: null };
 
     setState(prev => ({ ...prev, isMonitoring: true, status: 'scanning' }));
-    addLog('info', `Monitoring started. Checking every ${settings.checkInterval}s`);
+    addLog('info', `监控已启动。每 ${settings.checkInterval} 秒检测一次。`);
     
     performCheck();
     intervalRef.current = window.setInterval(performCheck, settings.checkInterval * 1000);
@@ -282,7 +288,7 @@ const App: React.FC = () => {
       intervalRef.current = null;
     }
     setState(prev => ({ ...prev, isMonitoring: false, status: 'idle' }));
-    addLog('info', 'Monitoring paused.');
+    addLog('info', '监控已暂停。');
   };
 
   return (
@@ -295,9 +301,9 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-              GameWatch AI
+              GameWatch AI 游戏掉线监控
             </h1>
-            <p className="text-slate-400 text-sm">Disconnection Monitor & Alerter</p>
+            <p className="text-slate-400 text-sm">智能画面识别与报警工具</p>
           </div>
         </div>
         
@@ -305,6 +311,7 @@ const App: React.FC = () => {
           <button 
             onClick={() => setShowSettings(!showSettings)}
             className={`p-3 rounded-xl transition-all ${showSettings ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            title="设置"
           >
             <SettingsIcon className="w-6 h-6" />
           </button>
@@ -325,10 +332,10 @@ const App: React.FC = () => {
                   className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full font-semibold transition-all shadow-xl shadow-indigo-500/20 flex items-center space-x-2"
                 >
                   <Play className="w-5 h-5" />
-                  <span>Start Screen Capture</span>
+                  <span>开始屏幕捕获</span>
                 </button>
                 <p className="text-slate-500 text-sm px-8 text-center">
-                  Select your game window or the entire screen to start monitoring.
+                  请选择您的游戏窗口或整个屏幕以开始监控。
                 </p>
               </div>
             )}
@@ -356,9 +363,9 @@ const App: React.FC = () => {
                     'bg-slate-400'
                   }`} />
                   <span className="text-xs font-bold uppercase tracking-wider">
-                    {state.status === 'alert' ? 'DISCONNECTED' : 
-                     state.status === 'scanning' ? 'MONITORING ACTIVE' : 
-                     'STANDBY'}
+                    {state.status === 'alert' ? '已掉线' : 
+                     state.status === 'scanning' ? '监控中' : 
+                     '待机'}
                   </span>
                 </div>
               </div>
@@ -374,7 +381,7 @@ const App: React.FC = () => {
                   className="px-6 py-2.5 bg-yellow-600/20 text-yellow-500 border border-yellow-600/50 rounded-xl font-bold flex items-center space-x-2 hover:bg-yellow-600/30 transition-colors"
                 >
                   <StopCircle className="w-5 h-5" />
-                  <span>Pause Monitor</span>
+                  <span>暂停监控</span>
                 </button>
               ) : (
                 <button 
@@ -383,7 +390,7 @@ const App: React.FC = () => {
                   disabled={!isCapturing}
                 >
                   <Play className="w-5 h-5" />
-                  <span>Resume Monitor</span>
+                  <span>恢复监控</span>
                 </button>
               )}
 
@@ -391,12 +398,12 @@ const App: React.FC = () => {
                 onClick={stopCapture}
                 className="px-4 py-2.5 bg-slate-700 text-slate-300 rounded-xl hover:bg-slate-600 transition-colors"
               >
-                Stop Capture
+                停止捕获
               </button>
             </div>
 
             <div className="text-right">
-              <p className="text-slate-400 text-xs font-medium uppercase tracking-widest">Last Check</p>
+              <p className="text-slate-400 text-xs font-medium uppercase tracking-widest">上次检测</p>
               <p className="text-slate-200 font-mono">
                 {state.lastCheck ? state.lastCheck.toLocaleTimeString() : '--:--:--'}
               </p>
@@ -408,45 +415,67 @@ const App: React.FC = () => {
         <aside className="space-y-6">
           {/* Settings Section */}
           {showSettings ? (
-            <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 h-full">
+            <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 h-full overflow-y-auto">
               <h3 className="text-lg font-bold mb-6 flex items-center space-x-2">
                 <ShieldAlert className="w-5 h-5 text-indigo-400" />
-                <span>Alert Configuration</span>
+                <span>报警设置 & 使用说明</span>
               </h3>
+
+              {/* Guide Section */}
+              <div className="bg-blue-900/20 border border-blue-500/30 p-4 rounded-xl mb-6">
+                <div className="flex items-center text-sm font-bold text-blue-300 mb-2">
+                  <Info className="w-4 h-4 mr-2" />
+                  使用说明 & 注意事项
+                </div>
+                <ol className="text-xs text-slate-300 space-y-2 list-decimal list-inside leading-relaxed">
+                  <li>
+                    <span className="text-white font-semibold">获取 喵码:</span> 前往 <a href="http://miaotixing.com/" target="_blank" rel="noreferrer" className="text-indigo-400 underline">喵提醒 (miaotixing.com)</a> 注册账号并创建提醒，获取您的“喵码”。
+                  </li>
+                  <li>
+                    <span className="text-white font-semibold">配置:</span> 将 喵码 复制到下方的输入框中。
+                  </li>
+                  <li>
+                    <span className="text-white font-semibold">启动:</span> 点击“开始屏幕捕获”，选择游戏窗口，然后点击“恢复监控”。
+                  </li>
+                  <li>
+                    <span className="text-white font-semibold">注意:</span> 请确保游戏窗口保持在屏幕上可见（不要最小化），否则无法进行图像识别。
+                  </li>
+                </ol>
+              </div>
               
               <div className="space-y-6">
                 
-                {/* PushPlus Token Input */}
+                {/* Meow Code Input */}
                 <div className="bg-indigo-900/20 p-4 rounded-xl border border-indigo-500/30">
                   <label className="block text-xs font-bold text-indigo-300 uppercase mb-2 flex items-center">
-                    <MessageSquare className="w-3 h-3 mr-1" /> PushPlus Token (WeChat)
+                    <MessageSquare className="w-3 h-3 mr-1" /> 喵提醒 喵码 (Meow Code)
                   </label>
                   <input 
                     type="password"
-                    placeholder="Paste your PushPlus token here"
-                    value={settings.pushPlusToken}
-                    onChange={(e) => setSettings({...settings, pushPlusToken: e.target.value})}
+                    placeholder="在此粘贴您的 喵码 (例如: txxxxxx)"
+                    value={settings.meowCode}
+                    onChange={(e) => setSettings({...settings, meowCode: e.target.value})}
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-white placeholder-slate-600"
                   />
                   <p className="text-[10px] text-slate-400 mt-2">
-                    Get your token at <a href="http://www.pushplus.plus" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">pushplus.plus</a> to receive WeChat alerts.
+                    必填项：用于发送微信报警通知 (通过喵提醒公众号)。
                   </p>
                 </div>
 
                 <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700 space-y-2">
                   <div className="flex items-center text-xs font-bold text-slate-300 mb-2">
                     <Clock className="w-3 h-3 mr-1.5 text-indigo-400" />
-                    <span>Smart Alert Logic</span>
+                    <span>智能报警逻辑</span>
                   </div>
                   <ul className="text-[10px] text-slate-400 space-y-1 list-disc list-inside">
-                    <li>First alert: <span className="text-indigo-300">30s after detection</span></li>
-                    <li>Repeats: <span className="text-indigo-300">Every 60s</span></li>
-                    <li>Timeout: <span className="text-indigo-300">Stops after 10 mins</span></li>
+                    <li>首次报警: <span className="text-indigo-300">检测到掉线 30秒 后</span></li>
+                    <li>重复频率: <span className="text-indigo-300">每 60秒 一次</span></li>
+                    <li>超时停止: <span className="text-indigo-300">持续 10分钟 后不再发送</span></li>
                   </ul>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Check Interval (seconds)</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">检测间隔 (秒)</label>
                   <input 
                     type="range" min="5" max="60" step="5"
                     value={settings.checkInterval}
@@ -454,14 +483,14 @@ const App: React.FC = () => {
                     className="w-full accent-indigo-500"
                   />
                   <div className="flex justify-between text-xs text-slate-500 mt-1">
-                    <span>5s</span>
-                    <span className="text-indigo-400 font-bold">{settings.checkInterval}s</span>
-                    <span>60s</span>
+                    <span>5秒</span>
+                    <span className="text-indigo-400 font-bold">{settings.checkInterval}秒</span>
+                    <span>60秒</span>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">AI Sensitivity</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">AI 灵敏度</label>
                   <input 
                     type="range" min="0.1" max="1.0" step="0.1"
                     value={settings.sensitivity}
@@ -469,15 +498,15 @@ const App: React.FC = () => {
                     className="w-full accent-indigo-500"
                   />
                   <div className="flex justify-between text-xs text-slate-500 mt-1">
-                    <span>Low</span>
+                    <span>低</span>
                     <span className="text-indigo-400 font-bold">{Math.round(settings.sensitivity * 100)}%</span>
-                    <span>High</span>
+                    <span>高</span>
                   </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase mb-2 flex items-center">
-                    <Smartphone className="w-3 h-3 mr-1" /> Generic Webhook (Optional)
+                    <Smartphone className="w-3 h-3 mr-1" /> 通用 Webhook (可选)
                   </label>
                   <input 
                     type="text"
@@ -492,7 +521,7 @@ const App: React.FC = () => {
                   onClick={() => setShowSettings(false)}
                   className="w-full py-3 bg-indigo-600 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
                 >
-                  Save & Return
+                  保存并返回
                 </button>
               </div>
             </div>
@@ -501,14 +530,14 @@ const App: React.FC = () => {
             <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700 h-full flex flex-col">
               <h3 className="text-lg font-bold mb-4 flex items-center space-x-2">
                 <History className="w-5 h-5 text-indigo-400" />
-                <span>Activity Logs</span>
+                <span>运行日志</span>
               </h3>
               
               <div className="flex-grow overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-slate-700">
                 {state.logs.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-slate-600">
                     <Bell className="w-12 h-12 mb-2 opacity-20" />
-                    <p className="text-sm">No activity recorded yet.</p>
+                    <p className="text-sm">暂无活动记录。</p>
                   </div>
                 ) : (
                   state.logs.map((log) => (
@@ -520,7 +549,9 @@ const App: React.FC = () => {
                           log.type === 'warning' ? 'bg-yellow-500/20 text-yellow-400' :
                           'bg-indigo-500/20 text-indigo-400'
                         }`}>
-                          {log.type}
+                          {log.type === 'error' ? '错误' : 
+                           log.type === 'success' ? '正常' : 
+                           log.type === 'warning' ? '警告' : '信息'}
                         </span>
                         <span className="text-slate-500 tabular-nums">
                           {log.timestamp.toLocaleTimeString()}
@@ -543,7 +574,7 @@ const App: React.FC = () => {
 
       {/* Footer Info */}
       <footer className="text-center py-4 text-slate-500 text-xs">
-        <p>© 2024 GameWatch AI Powered by Gemini 3. Ensure your screen remains visible for monitoring.</p>
+        <p>© 2024 GameWatch AI - 由 Gemini 3 驱动。请确保监控窗口保持在前台或可见状态。</p>
       </footer>
     </div>
   );

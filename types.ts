@@ -22,7 +22,7 @@ export interface DetectionResult {
 
 export interface Settings {
   webhookUrl: string;
-  pushPlusToken: string; // Added for WeChat notifications
+  meowCode: string; // Changed from pushPlusToken to meowCode
   checkInterval: number; // seconds
   sensitivity: number;
 }

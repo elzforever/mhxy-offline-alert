@@ -1,20 +1,50 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+# GameWatch AI 使用说明书
 
-This contains everything you need to run your app locally.
+## 简介
+GameWatch AI 是一款智能游戏掉线监控工具，利用 Gemini 视觉识别技术实时分析游戏画面。当检测到“网络错误”、“掉线”或“重新连接”等弹窗时，会自动通过**喵提醒**（微信推送）或其他 Webhook 方式通知您。
 
-View your app in AI Studio: https://ai.studio/apps/drive/1bIsprJhED-d5-p2eSG0XnRkSbI_2gcfN
+## 功能特点
+1.  **AI 视觉识别**：无需读取游戏内存，通过图像识别技术检测掉线，安全防封。
+2.  **智能报警策略**：
+    *   **防误触**：检测到掉线后持续 30秒 确认，避免瞬间网络波动导致的误报。
+    *   **循环提醒**：确认掉线后，每 60秒 推送一次通知。
+    *   **自动停止**：持续掉线 10分钟 后自动停止报警，防止信息轰炸。
+3.  **多渠道通知**：支持喵提醒（微信）和通用 Webhook。
 
-## Run Locally
+## 快速开始
 
-**Prerequisites:**  Node.js
+### 第一步：获取喵码 (用于微信通知)
+1.  打开浏览器访问 [喵提醒官网](http://miaotixing.com/)。
+2.  注册账号并登录。
+3.  关注“喵提醒”微信公众号。
+4.  在后台创建一个新的提醒，您将获得一个**“喵码”**（例如：`t123456`）。
 
+### 第二步：配置 GameWatch
+1.  打开本应用。
+2.  点击右上角的 **设置 (Settings)** 图标。
+3.  在 **喵提醒 喵码** 输入框中，粘贴您刚才获取的“喵码”。
+4.  (可选) 调整 **检测间隔** 和 **AI 灵敏度**。默认设置通常适用于大多数情况。
+5.  点击 **保存并返回**。
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### 第三步：启动监控
+1.  点击主界面中央的 **开始屏幕捕获** 按钮。
+2.  在弹出的浏览器窗口中，选择 **“窗口”** 或 **“整个屏幕”**。
+    *   *建议：直接选择游戏所在的窗口。*
+3.  画面出现在应用中后，点击下方的 **恢复监控** 按钮。
+4.  应用状态将变为 **监控中** (Monitoring Active)。
+
+## 注意事项
+*   **保持可见**：浏览器必须能够“看”到游戏画面。如果游戏窗口被完全遮挡或最小化，屏幕捕获可能会变黑或静止，导致无法识别。建议将游戏窗口并排显示，或使用双屏。
+*   **权限**：首次使用时，浏览器会请求屏幕录制权限，请务必允许。
+*   **网络**：AI 识别需要访问 Google Gemini API，请确保您的网络环境可以连接。
+
+## 常见问题
+**Q: 为什么一直不报警？**
+A: 请检查 AI 灵敏度是否设置过高，或者“喵码”是否正确。另外，只有当掉线弹窗持续存在超过 30 秒时才会触发第一次报警。
+
+**Q: 报警太频繁怎么办？**
+A: 应用内置了每 60 秒报警一次的限制。如果您觉得仍然频繁，可以暂停监控。
+
+**Q: 关闭网页后还在监控吗？**
+A: 不在。网页关闭后监控即停止。
