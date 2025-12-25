@@ -1,0 +1,8 @@
+# --- 核心修复部分 ---
+
+# 将 /api/analyze 路径明确指向 Edge Function
+[[edge_functions]]
+  function = "analyze"    # 这里对应的是文件名，不带后缀
+  path = "/api/analyze"   # 这里是前端请求的 URL 路径
+
+# -------------------
