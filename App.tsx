@@ -142,7 +142,7 @@ const App: React.FC = () => {
         const now = Date.now();
         
         // Handle explicit API/Network errors
-        if (result.reason && (result.reason.startsWith("Request Failed") || result.reason.startsWith("API Route Error"))) {
+        if (result.reason && (result.reason.startsWith("Request Failed") || result.reason.startsWith("API Route Error") || result.reason.startsWith("Analysis Failed"))) {
            addLog('error', result.reason);
            // Do not proceed with logic if API failed
            setState(prev => ({ ...prev, lastCheck: new Date() }));
@@ -315,7 +315,7 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-              GameWatch AI 游戏掉线监控
+              GameWatch AI 游戏掉线监控 (本地版)
             </h1>
             <p className="text-slate-400 text-sm">智能画面识别与报警工具</p>
           </div>
@@ -588,7 +588,7 @@ const App: React.FC = () => {
 
       {/* Footer Info */}
       <footer className="text-center py-4 text-slate-500 text-xs">
-        <p>© 2024 GameWatch AI - 由 Gemini 3 驱动。请确保监控窗口保持在前台或可见状态。</p>
+        <p>© 2024 GameWatch AI - 由 Gemini 3 驱动。本地运行模式。</p>
       </footer>
     </div>
   );
