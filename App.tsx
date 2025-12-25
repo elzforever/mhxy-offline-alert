@@ -770,6 +770,9 @@ const App: React.FC = () => {
       {/* Footer Info */}
       <footer className="text-center py-4 text-slate-500 text-xs">
         <p>© 2024 GameWatch OCR - 本地离线识别模式。</p>
+        <p className="mt-1 opacity-70">
+          Created by 此去依然 | <a href="mailto:sam695781276@outlook.com" className="hover:text-emerald-400 transition-colors">sam695781276@outlook.com</a>
+        </p>
       </footer>
     </div>
   );
