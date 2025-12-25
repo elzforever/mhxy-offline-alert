@@ -26,4 +26,5 @@ export interface Settings {
   meowCode: string; // Changed from pushPlusToken to meowCode
   checkInterval: number; // seconds
   sensitivity: number;
+  enableLocalSound: boolean; // New: Local TTS alert
 }

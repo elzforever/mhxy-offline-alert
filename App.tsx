@@ -17,7 +17,9 @@ import {
   Upload,
   CheckCircle2,
   XCircle,
-  Bug
+  Bug,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 
 interface QueuedAlert {
@@ -41,7 +43,8 @@ const App: React.FC = () => {
     webhookUrl: '',
     meowCode: '', 
     checkInterval: 5, 
-    sensitivity: 0.6 
+    sensitivity: 0.6,
+    enableLocalSound: false 
   });
 
   const [showSettings, setShowSettings] = useState(false);
@@ -74,7 +77,12 @@ const App: React.FC = () => {
     if (savedSettings) {
       try {
         const parsed = JSON.parse(savedSettings);
-        setSettings(prev => ({ ...prev, ...parsed }));
+        // Ensure new property exists even if loading old settings
+        setSettings(prev => ({ 
+          ...prev, 
+          ...parsed,
+          enableLocalSound: parsed.enableLocalSound ?? false 
+        }));
       } catch (e) { console.error("Failed to load settings"); }
     }
 
@@ -96,6 +104,8 @@ const App: React.FC = () => {
       ocrRef.current?.terminate();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
     };
   }, []);
 
@@ -117,6 +127,22 @@ const App: React.FC = () => {
       logs: [newLog, ...prev.logs].slice(0, 50)
     }));
   }, []);
+
+  // --- TTS Helper ---
+  const playTTS = (text: string) => {
+    if (!('speechSynthesis' in window)) return;
+    
+    // Cancel previous
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'zh-CN'; // Force Chinese
+    utterance.rate = 1.0;
+    utterance.pitch = 1.1;
+    utterance.volume = 1.0;
+    
+    window.speechSynthesis.speak(utterance);
+  };
 
   // --- Queue Processing ---
   const processAlertQueue = async () => {
@@ -249,6 +275,7 @@ const App: React.FC = () => {
             addLog('success', '未检测到掉线关键字。报警逻辑已重置。');
             logic.disconnectStartTime = null;
             logic.lastAlertTime = null;
+            window.speechSynthesis.cancel(); // Stop shouting if connected
           }
 
           setState(prev => ({ 
@@ -274,6 +301,16 @@ const App: React.FC = () => {
   const triggerAlert = async (result: DetectionResult, durationSec: number) => {
     const timestamp = new Date().toLocaleString();
     const isOnline = navigator.onLine;
+
+    // 0. Local TTS Alert (Highest priority for local user)
+    if (settings.enableLocalSound) {
+      playTTS("游戏掉线了，请尽快重新登录。");
+    } else {
+      // Fallback to simple beep if TTS is off
+      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+      audio.volume = 0.5;
+      audio.play().catch(() => {});
+    }
 
     // 1. Miao Ti Xing
     if (settings.meowCode) {
@@ -339,18 +376,10 @@ const App: React.FC = () => {
         icon: "https://picsum.photos/100/100"
       });
     }
-    
-    // 4. Audio (Local)
-    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-    audio.play().catch(() => {});
   };
 
   const handleTestAlert = () => {
-    if (!settings.meowCode && !settings.webhookUrl) {
-      alert("请先配置 喵码 或 Webhook URL");
-      return;
-    }
-    addLog('info', '正在发送测试报警...');
+    addLog('info', '正在测试报警...');
     triggerAlert({
       isDisconnected: true,
       confidence: 1.0,
@@ -406,6 +435,7 @@ const App: React.FC = () => {
     }
     setState(prev => ({ ...prev, isMonitoring: false, status: 'idle' }));
     addLog('info', '监控已暂停。');
+    window.speechSynthesis.cancel();
   };
 
   return (
@@ -562,6 +592,43 @@ const App: React.FC = () => {
               
               <div className="space-y-6 flex-grow">
                 
+                {/* Local Sound Setting */}
+                <div className={`p-4 rounded-xl border transition-all ${settings.enableLocalSound ? 'bg-orange-900/20 border-orange-500/50' : 'bg-slate-700/30 border-slate-600'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-bold text-slate-300 uppercase flex items-center">
+                      <Volume2 className="w-3 h-3 mr-2" /> 本地语音告警
+                    </label>
+                    <button 
+                      onClick={() => playTTS("测试语音。游戏掉线了，请尽快重新登录。")}
+                      className="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-white"
+                      title="试听"
+                    >
+                      试听
+                    </button>
+                  </div>
+                  
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={() => setSettings(s => ({...s, enableLocalSound: !s.enableLocalSound}))}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        settings.enableLocalSound ? 'bg-orange-500' : 'bg-slate-600'
+                      }`}
+                    >
+                      <span
+                        className={`${
+                          settings.enableLocalSound ? 'translate-x-6' : 'translate-x-1'
+                        } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
+                      />
+                    </button>
+                    <span className="text-xs text-slate-400">
+                      {settings.enableLocalSound ? '已开启 (播报语音)' : '已关闭 (仅提示音)'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-2">
+                    开启后，掉线时将通过本机音响循环播放“游戏掉线了，请尽快重新登录”。
+                  </p>
+                </div>
+
                 <div className="bg-indigo-900/20 p-4 rounded-xl border border-indigo-500/30">
                   <label className="block text-xs font-bold text-indigo-300 uppercase mb-2 flex items-center">
                     <MessageSquare className="w-3 h-3 mr-1" /> 喵提醒 喵码
