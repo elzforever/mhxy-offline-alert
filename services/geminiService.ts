@@ -6,7 +6,17 @@ export class GeminiService {
   private ai: GoogleGenAI;
 
   constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+    let apiKey = '';
+    try {
+      // Safely attempt to access process.env.API_KEY
+      // In some static environments, 'process' might not be defined.
+      if (typeof process !== 'undefined' && process.env) {
+        apiKey = process.env.API_KEY || '';
+      }
+    } catch (e) {
+      console.warn("Unable to access process.env.API_KEY");
+    }
+    this.ai = new GoogleGenAI({ apiKey });
   }
 
   async analyzeFrame(base64Image: string): Promise<DetectionResult> {
