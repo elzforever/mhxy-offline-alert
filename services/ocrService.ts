@@ -56,11 +56,11 @@ export class OcrService {
 
   /**
    * Preprocesses the image to improve OCR accuracy.
-   * 1. Crops to the center (where dialogs usually are).
-   * 2. UPSCALES by 2x (Critical for small text).
+   * 1. Crops to the center.
+   * 2. UPSCALES (Critical for small text).
    * 3. Binarizes (High contrast black/white).
    */
-  private async preprocessImage(base64Image: string): Promise<string> {
+  private async preprocessImage(base64Image: string, focusMode: boolean = false): Promise<string> {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
@@ -71,16 +71,24 @@ export class OcrService {
           return;
         }
 
-        // 1. CROP: Focus on the center 70% width and 60% height.
-        // This removes chat windows, minimaps, etc.
-        const cropWidth = img.width * 0.7;
-        const cropHeight = img.height * 0.6;
+        // --- CROP STRATEGY ---
+        // Normal Mode: Capture 70% width, 60% height. Good for general popups.
+        // Focus Mode: Capture 40% width, 40% height. Good for small center popups.
+        
+        let cropWPercent = 0.7;
+        let cropHPercent = 0.6;
+        let scaleFactor = 2.0; // Normal upscale
+
+        if (focusMode) {
+          cropWPercent = 0.4; // Tighter width
+          cropHPercent = 0.4; // Tighter height
+          scaleFactor = 3.0;  // Higher upscale for small text
+        }
+
+        const cropWidth = img.width * cropWPercent;
+        const cropHeight = img.height * cropHPercent;
         const startX = (img.width - cropWidth) / 2;
         const startY = (img.height - cropHeight) / 2;
-
-        // 2. UPSCALE: Scale up by 2x. Tesseract loves larger text.
-        // If the text in the game is 12px, OCR might fail. At 24px, it works great.
-        const scaleFactor = 2.0;
         
         canvas.width = cropWidth * scaleFactor;
         canvas.height = cropHeight * scaleFactor;
@@ -92,7 +100,7 @@ export class OcrService {
           0, 0, canvas.width, canvas.height      // Dest rect (Scaled)
         );
 
-        // 3. GRAYSCALE & BINARIZATION
+        // --- BINARIZATION ---
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
         
@@ -126,7 +134,7 @@ export class OcrService {
     });
   }
 
-  async analyzeFrame(base64Image: string): Promise<DetectionResult> {
+  async analyzeFrame(base64Image: string, options?: { focusMode?: boolean }): Promise<DetectionResult> {
     if (this.initError) {
       return {
         isDisconnected: false,
@@ -146,15 +154,14 @@ export class OcrService {
 
     try {
       // Step 1: Preprocess the image (Crop + Upscale + Binarize)
-      const processedImage = await this.preprocessImage(base64Image);
+      // Pass the focusMode setting
+      const processedImage = await this.preprocessImage(base64Image, options?.focusMode);
 
       // Step 2: Analyze the PROCESSED image
       const { data: { text, confidence } } = await this.worker.recognize(processedImage);
       
       // Step 3: Normalization Strategy
-      // Instead of just removing spaces, we remove ALL punctuation and symbols.
-      // Example: "网络错误，请重新登录。" -> "网络错误请重新登录"
-      // This prevents OCR errors where a comma is read as a dot or a speck of dust.
+      // Remove ALL punctuation and symbols.
       const cleanText = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, "");
       
       // Check for keywords against the cleaned text

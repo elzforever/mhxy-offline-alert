@@ -28,4 +28,5 @@ export interface Settings {
   checkInterval: number; // seconds
   sensitivity: number;
   enableLocalSound: boolean; // New: Local TTS alert
+  focusMode: boolean; // New: Focus on center small area
 }

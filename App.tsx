@@ -20,7 +20,8 @@ import {
   Bug,
   Volume2,
   VolumeX,
-  Eye
+  Eye,
+  Scan
 } from 'lucide-react';
 
 interface QueuedAlert {
@@ -45,7 +46,8 @@ const App: React.FC = () => {
     meowCode: '', 
     checkInterval: 5, 
     sensitivity: 0.6,
-    enableLocalSound: false 
+    enableLocalSound: false,
+    focusMode: false // Default to false
   });
 
   const [showSettings, setShowSettings] = useState(false);
@@ -82,7 +84,8 @@ const App: React.FC = () => {
         setSettings(prev => ({ 
           ...prev, 
           ...parsed,
-          enableLocalSound: parsed.enableLocalSound ?? false 
+          enableLocalSound: parsed.enableLocalSound ?? false,
+          focusMode: parsed.focusMode ?? false
         }));
       } catch (e) { console.error("Failed to load settings"); }
     }
@@ -227,7 +230,10 @@ const App: React.FC = () => {
       const imageData = canvas.toDataURL('image/jpeg', 1.0);
 
       try {
-        const result: DetectionResult = await ocrRef.current.analyzeFrame(imageData);
+        // PASS focusMode SETTING HERE
+        const result: DetectionResult = await ocrRef.current.analyzeFrame(imageData, { 
+          focusMode: settings.focusMode 
+        });
         const now = Date.now();
         
         if (result.reason && (result.reason.startsWith("OCR Model Loading"))) {
@@ -400,7 +406,9 @@ const App: React.FC = () => {
     reader.onload = async (e) => {
       const base64 = e.target?.result as string;
       try {
-        const result = await ocrRef.current!.analyzeFrame(base64);
+        const result = await ocrRef.current!.analyzeFrame(base64, {
+          focusMode: settings.focusMode // Pass current setting even during test
+        });
         setTestResult(result);
       } catch (err) {
         console.error("Test failed", err);
@@ -529,6 +537,14 @@ const App: React.FC = () => {
                      '待机'}
                   </span>
                 </div>
+                
+                {/* Focus Mode Indicator */}
+                {settings.focusMode && (
+                   <div className="flex items-center space-x-2 px-3 py-1.5 rounded-full backdrop-blur-md border self-start bg-blue-500/20 border-blue-500 text-blue-300">
+                    <Scan className="w-3 h-3" />
+                    <span className="text-xs font-bold uppercase tracking-wider">专注中心模式</span>
+                  </div>
+                )}
 
                 {/* Pending Alerts Indicator */}
                 {!isNetworkOnline && pendingAlertCount > 0 && (
@@ -594,6 +610,36 @@ const App: React.FC = () => {
               
               <div className="space-y-6 flex-grow">
                 
+                {/* Focus Mode Setting */}
+                <div className={`p-4 rounded-xl border transition-all ${settings.focusMode ? 'bg-blue-900/20 border-blue-500/50' : 'bg-slate-700/30 border-slate-600'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-bold text-slate-300 uppercase flex items-center">
+                      <Scan className="w-3 h-3 mr-2" /> 专注中心模式
+                    </label>
+                  </div>
+                  
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={() => setSettings(s => ({...s, focusMode: !s.focusMode}))}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        settings.focusMode ? 'bg-blue-500' : 'bg-slate-600'
+                      }`}
+                    >
+                      <span
+                        className={`${
+                          settings.focusMode ? 'translate-x-6' : 'translate-x-1'
+                        } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
+                      />
+                    </button>
+                    <span className="text-xs text-slate-400">
+                      {settings.focusMode ? '已开启 (3倍放大)' : '已关闭 (常规)'}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-2">
+                    适用于弹窗较小且固定在屏幕中央的情况。开启后只识别屏幕中心区域 (40%范围)，并大幅放大细节。
+                  </p>
+                </div>
+
                 {/* Local Sound Setting */}
                 <div className={`p-4 rounded-xl border transition-all ${settings.enableLocalSound ? 'bg-orange-900/20 border-orange-500/50' : 'bg-slate-700/30 border-slate-600'}`}>
                   <div className="flex items-center justify-between mb-2">
@@ -677,7 +723,7 @@ const App: React.FC = () => {
                     <Bug className="w-3 h-3 mr-2" /> OCR 诊断工具
                   </h4>
                   <p className="text-[10px] text-slate-400 mb-3">
-                    上传掉线截图，测试 OCR 是否能准确识别关键字。
+                    上传掉线截图，测试 OCR 是否能准确识别关键字。系统将使用当前的“专注模式”设置来处理图片。
                   </p>
                   
                   <div className="flex flex-col space-y-3">
@@ -713,7 +759,7 @@ const App: React.FC = () => {
                           {testResult.processedImage && (
                              <div className="mt-2">
                                <p className="text-slate-500 text-[10px] mb-1 flex items-center">
-                                 <Eye className="w-3 h-3 mr-1" /> 机器视角 (已裁切+二值化)
+                                 <Eye className="w-3 h-3 mr-1" /> 机器视角 ({settings.focusMode ? '专注模式:3x放大' : '常规模式'})
                                </p>
                                <img src={testResult.processedImage} alt="AI Vision" className="w-full border border-slate-600 rounded" />
                              </div>
