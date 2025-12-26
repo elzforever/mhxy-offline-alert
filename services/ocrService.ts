@@ -6,31 +6,30 @@ export class OcrService {
   private isInitializing: boolean = false;
   private initError: string | null = null;
 
-  // Keywords refined based on user feedback.
-  // Priority: 1. 网络错误 (Network Error) 2. 请重新登录 (Please Relogin)
-  // NOTE: Text is stripped of whitespace before matching, so English keywords use \s? to match "NetworkError"
+  // Keywords refined based on user feedback and screenshots.
+  // We will strip all punctuation and spaces before matching, so keywords should be pure text.
   private errorKeywords = [
-    // --- Top Priority (Core Disconnect Indicators) ---
-    /网络错误/,       // Network Error (Most accurate)
-    /请重新登录/,     // Please Relogin (Secondary accurate)
-    /请重新连接/,     // Please Reconnect (Common variant)
-
-    // --- English Strong Indicators ---
-    /network\s?error/i,
-    /connection\s?lost/i,
-    /disconnected/i,
-    /please\s?relogin/i,
-    /please\s?reconnect/i,
-    /server\s?error/i,
-    /timed\s?out/i,
+    // --- From User Screenshot ---
+    /网络错误/,       // Matches title and body
+    /请重新登录/,     // Matches body
+    /网络有问题/,     // Matches the blue link text
+    /检测一下吧/,     // Matches the blue link text
     
-    // --- Other Chinese Contexts ---
-    /断开连接/,       // Disconnected
-    /连接超时/,       // Connection Timeout
-    /网络异常/,       // Network Exception
-    /与服务器断开/,    // Disconnected from server
-    /点击重试/,       // Click to retry
-    /确定/            // Confirm (Context dependant, but useful if combined with others, though here we match single phrases)
+    // --- Common Disconnect Indicators ---
+    /请重新连接/,
+    /断开连接/,
+    /连接超时/,
+    /网络异常/,
+    /服务器断开/,
+    /点击重试/,
+    
+    // --- English ---
+    /networkerror/i,
+    /connectionlost/i,
+    /disconnected/i,
+    /pleaserelogin/i,
+    /servererror/i,
+    /timedout/i
   ];
 
   constructor() {
@@ -58,7 +57,7 @@ export class OcrService {
   /**
    * Preprocesses the image to improve OCR accuracy.
    * 1. Crops to the center (where dialogs usually are).
-   * 2. Converts to Grayscale.
+   * 2. UPSCALES by 2x (Critical for small text).
    * 3. Binarizes (High contrast black/white).
    */
   private async preprocessImage(base64Image: string): Promise<string> {
@@ -73,26 +72,32 @@ export class OcrService {
         }
 
         // 1. CROP: Focus on the center 70% width and 60% height.
-        // This removes chat windows (bottom left), minimaps (top right), and status bars.
+        // This removes chat windows, minimaps, etc.
         const cropWidth = img.width * 0.7;
         const cropHeight = img.height * 0.6;
         const startX = (img.width - cropWidth) / 2;
         const startY = (img.height - cropHeight) / 2;
 
-        canvas.width = cropWidth;
-        canvas.height = cropHeight;
+        // 2. UPSCALE: Scale up by 2x. Tesseract loves larger text.
+        // If the text in the game is 12px, OCR might fail. At 24px, it works great.
+        const scaleFactor = 2.0;
+        
+        canvas.width = cropWidth * scaleFactor;
+        canvas.height = cropHeight * scaleFactor;
 
-        // Draw the cropped area onto the canvas
-        ctx.drawImage(img, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+        // Draw the cropped area onto the canvas, scaled up
+        ctx.drawImage(
+          img, 
+          startX, startY, cropWidth, cropHeight, // Source rect
+          0, 0, canvas.width, canvas.height      // Dest rect (Scaled)
+        );
 
-        // 2. GRAYSCALE & BINARIZATION
-        const imageData = ctx.getImageData(0, 0, cropWidth, cropHeight);
+        // 3. GRAYSCALE & BINARIZATION
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
         
         // Threshold for binarization (0-255). 
-        // 128 is standard, but sometimes game dialogs are semi-transparent dark.
-        // We use a dynamic approach or a fixed safe value. 
-        // For game text (usually white on dark or black on white), high contrast is key.
+        // 160 works well for standard UI (Dark text on Light background).
         const threshold = 160; 
 
         for (let i = 0; i < data.length; i += 4) {
@@ -103,14 +108,14 @@ export class OcrService {
           // Standard luminosity formula
           const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-          // Binarize: If lighter than threshold, make it white, else black.
-          // This creates a sharp black/white image which Tesseract loves.
+          // Binarize:
+          // If the pixel is light (background), make it pure WHITE (255).
+          // If the pixel is dark (text), make it pure BLACK (0).
           const val = gray >= threshold ? 255 : 0;
 
           data[i] = val;
           data[i + 1] = val;
           data[i + 2] = val;
-          // data[i+3] is alpha, leave it alone
         }
 
         ctx.putImageData(imageData, 0, 0);
@@ -140,28 +145,30 @@ export class OcrService {
     }
 
     try {
-      // Step 1: Preprocess the image (Crop + Binarize)
+      // Step 1: Preprocess the image (Crop + Upscale + Binarize)
       const processedImage = await this.preprocessImage(base64Image);
 
       // Step 2: Analyze the PROCESSED image
       const { data: { text, confidence } } = await this.worker.recognize(processedImage);
       
-      // Strategy: Remove ALL whitespace to handle Tesseract's tendency to add spaces 
-      const denseText = text.replace(/\s+/g, '');
-      const readableText = text.replace(/\s+/g, ' ').trim();
+      // Step 3: Normalization Strategy
+      // Instead of just removing spaces, we remove ALL punctuation and symbols.
+      // Example: "网络错误，请重新登录。" -> "网络错误请重新登录"
+      // This prevents OCR errors where a comma is read as a dot or a speck of dust.
+      const cleanText = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, "");
       
-      // Check for keywords against the dense text
-      const matchedKeyword = this.errorKeywords.find(regex => regex.test(denseText));
+      // Check for keywords against the cleaned text
+      const matchedKeyword = this.errorKeywords.find(regex => regex.test(cleanText));
 
       if (matchedKeyword) {
-        const matchString = denseText.match(matchedKeyword)?.[0] || "Error Keyword";
+        const matchString = cleanText.match(matchedKeyword)?.[0] || "Error Keyword";
         
         return {
           isDisconnected: true,
           confidence: Math.max(0.85, confidence / 100), 
           reason: `Detected: "${matchString}"`,
-          debugText: `[Match Found]\nProcessed: "${denseText}"`,
-          processedImage: processedImage // Return the b&w image for debugging
+          debugText: `[Match Found]\nRaw: "${text.substring(0, 20)}..."\nClean: "${cleanText}"`,
+          processedImage: processedImage 
         };
       }
 
@@ -169,7 +176,7 @@ export class OcrService {
         isDisconnected: false,
         confidence: 0,
         reason: "No error text detected",
-        debugText: `[No Match]\nProcessed: "${denseText}"`,
+        debugText: `[No Match]\nClean: "${cleanText}"`,
         processedImage: processedImage
       };
 
