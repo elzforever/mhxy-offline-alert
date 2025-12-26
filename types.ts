@@ -19,6 +19,7 @@ export interface DetectionResult {
   confidence: number;
   reason: string;
   debugText?: string; // Raw text extracted by OCR for debugging
+  processedImage?: string; // The image after grayscale/cropping processing
 }
 
 export interface Settings {

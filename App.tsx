@@ -19,7 +19,8 @@ import {
   XCircle,
   Bug,
   Volume2,
-  VolumeX
+  VolumeX,
+  Eye
 } from 'lucide-react';
 
 interface QueuedAlert {
@@ -259,7 +260,8 @@ const App: React.FC = () => {
             if (shouldAlert) {
               await triggerAlert(result, Math.floor(durationMs / 1000));
               logic.lastAlertTime = now;
-              addLog('error', `触发报警: ${result.reason} (持续时间: ${Math.floor(durationMs/1000)}秒)`, imageData);
+              // Log with the processed image if available, else original
+              addLog('error', `触发报警: ${result.reason} (持续时间: ${Math.floor(durationMs/1000)}秒)`, result.processedImage || imageData);
             }
           }
 
@@ -703,9 +705,19 @@ const App: React.FC = () => {
                             {testResult.isDisconnected ? '检测到掉线' : '未检测到掉线'}
                           </span>
                         </div>
-                        <div className="mt-2 space-y-1">
+                        <div className="mt-2 space-y-2">
                           <p className="text-slate-400">原因: <span className="text-slate-200">{testResult.reason}</span></p>
                           <p className="text-slate-400">原文: <span className="text-slate-200 font-mono bg-black/30 px-1 rounded break-all">{testResult.debugText || "无"}</span></p>
+                          
+                          {/* Display Processed Image */}
+                          {testResult.processedImage && (
+                             <div className="mt-2">
+                               <p className="text-slate-500 text-[10px] mb-1 flex items-center">
+                                 <Eye className="w-3 h-3 mr-1" /> 机器视角 (已裁切+二值化)
+                               </p>
+                               <img src={testResult.processedImage} alt="AI Vision" className="w-full border border-slate-600 rounded" />
+                             </div>
+                          )}
                         </div>
                       </div>
                     )}
